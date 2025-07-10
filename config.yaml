@@ -1,0 +1,22 @@
+# Root directories
+root_dir: "/nfs2/harmonization/BIDS/CIBS_BRAIN2/derivatives/"
+t1_root_dir: "/nfs2/harmonization/BIDS/CIBS_BRAIN2"
+pattern: "sub-*/ses-*/SLANT-TICVv1.2/post/FinalResult/*_T1w_seg.nii.gz"
+pattern_run: "sub-*/ses-*/SLANT-TICVv1.2*/post/FinalResult/*_T1w_seg.nii.gz"
+
+# Statistic outputs
+ai_pairs_csv: "labels/slant_ai_pairs.csv"
+label_index: "labels/label_index.csv"
+ticv_csv: "stats_csv/ticv_summary.csv"
+brainvol_csv: "stats_csv/brain_volume.csv"
+asymmetry_index_csv: "stats_csv/asymmetry_index.csv"
+roi_volumes_csv: "stats_csv/roi_volumes.csv"
+roi_volumes_z_csv: "stats_csv/roi_volumes_zscore.csv"
+roi_volumes_ses00_csv: "stats_csv/roi_volumes_ses00.csv"
+roi_volumes_ses12_csv: "stats_csv/roi_volumes_ses12.csv"
+roi_volumes_ses00_z_csv: "stats_csv/roi_volumes_ses00_zscore.csv"
+roi_volumes_ses12_z_csv: "stats_csv/roi_volumes_ses12_zscore.csv"
+roi_volumes_delta_pct_csv: "stats_csv/roi_volumes_delta_pct.csv"
+
+# ROI colour label
+lut_addr: "labels/slant-ticv.label"
