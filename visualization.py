@@ -1,6 +1,7 @@
 import nibabel as nib
 import numpy as np
 import yaml
+import warnings
 
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap, BoundaryNorm
@@ -87,10 +88,12 @@ def visualize_slant(
     coronal_slices: int | str | Sequence[int | str] = "mid",
     axial_slices: int | str | Sequence[int | str] = "mid",
     keep_roi_list: List | None = None,
+    auto_slice: bool = False,
     t1_file: str | Path | None = None,
     alpha_seg: float = 0.6,
     save_path: Path | None = None,
-) -> None:
+    show_img: bool = True,
+) -> plt.Figure:
     seg_img = nib.load(seg_file, mmap=True)
     seg_data_native = seg_img.get_fdata(dtype=np.float32)
 
@@ -113,6 +116,34 @@ def visualize_slant(
     else:
         t1_data = None
         alpha_seg = 1.0
+
+    if auto_slice:
+        if keep_roi_list is None:
+            raise ValueError("auto_slice=True requires keep_roi_list to be provided")
+        if sagittal_slices != "mid" or coronal_slices != "mid" or axial_slices != "mid":
+            warnings.warn(
+                "auto_slice=True: Ignoring provided slices, choosing best slices based on area.",
+                UserWarning,
+            )
+        areas_x = [
+            np.count_nonzero(np.isin(seg_data[i, :, :], keep_roi_list))
+            for i in range(seg_data.shape[0])
+        ]
+        best_x = int(np.argmax(areas_x))
+        areas_y = [
+            np.count_nonzero(np.isin(seg_data[:, j, :], keep_roi_list))
+            for j in range(seg_data.shape[1])
+        ]
+        best_y = int(np.argmax(areas_y))
+        areas_z = [
+            np.count_nonzero(np.isin(seg_data[:, :, k], keep_roi_list))
+            for k in range(seg_data.shape[2])
+        ]
+        best_z = int(np.argmax(areas_z))
+
+        sagittal_slices = [best_x]
+        coronal_slices = [best_y]
+        axial_slices = [best_z]
 
     x_idxs = _normalize_slices(sagittal_slices, seg_data.shape[0])
     y_idxs = _normalize_slices(coronal_slices, seg_data.shape[1])
@@ -155,9 +186,11 @@ def visualize_slant(
     plt.tight_layout()
     if save_path:
         fig.savefig(save_path, dpi=300, bbox_inches="tight")
-        plt.close(fig)
-    else:
+    if show_img:
         plt.show()
+    else:
+        plt.close(fig)
+    return fig
 
 
 def visualize_slant_subjectid(
@@ -167,10 +200,12 @@ def visualize_slant_subjectid(
     coronal_slices: int | str | Sequence[int | str] = "mid",
     axial_slices: int | str | Sequence[int | str] = "mid",
     keep_roi_list: List | None = None,
+    auto_slice: bool = False,
     bg_t1_file: bool = False,
     alpha_seg: float = 0.6,
     save_path: Path | None = None,
-):
+    show_img: bool = True,
+) -> plt.Figure:
     sub, ses = subjectid.split("_")
     base_seg_dir = Path(slant_root_dir) / sub / ses
     seg_candidates = [
@@ -190,37 +225,31 @@ def visualize_slant_subjectid(
             base_t1_dir / f"{subjectid}_T1w.nii.gz",
         ]
         t1_file = _pick_first_exist(t1_candidates)
-    visualize_slant(
+    return visualize_slant(
         seg_file,
         lut_addr,
         sagittal_slices,
         coronal_slices,
         axial_slices,
         keep_roi_list,
+        auto_slice,
         t1_file,
         alpha_seg,
         save_path,
+        show_img,
     )
 
 
-def visualize_t1w_subjectid(
-    subjectid: str,
-    root: str | Path = t1_root_dir,
-    run_number: int = 1,
+def visualize_t1w(
+    t1_file: str | Path,
     sagittal_slices: int | str | Sequence[int | str] = "mid",
     coronal_slices: int | str | Sequence[int | str] = "mid",
     axial_slices: int | str | Sequence[int | str] = "mid",
     perc: tuple[float, float] = (1, 99),
     save_path: Path | None = None,
-) -> None:
-    root = Path(root)
-    sub, ses = subjectid.split("_")
-    base_t1_dir = Path(t1_root_dir) / sub / ses / "anat"
-    t1_candidates = [
-        base_t1_dir / f"{subjectid}_run-{run_number}_T1w.nii.gz",
-        base_t1_dir / f"{subjectid}_T1w.nii.gz",
-    ]
-    t1_file = _pick_first_exist(t1_candidates)
+    show_img: bool = True,
+) -> plt.Figure:
+    t1_file = Path(t1_file)
     if not t1_file.exists():
         raise FileNotFoundError(t1_file)
 
@@ -262,6 +291,38 @@ def visualize_t1w_subjectid(
     plt.tight_layout()
     if save_path:
         fig.savefig(save_path, dpi=300, bbox_inches="tight")
-        plt.close(fig)
-    else:
+    if show_img:
         plt.show()
+    else:
+        plt.close(fig)
+    return fig
+
+
+def visualize_t1w_subjectid(
+    subjectid: str,
+    root: str | Path = t1_root_dir,
+    run_number: int = 1,
+    sagittal_slices: int | str | Sequence[int | str] = "mid",
+    coronal_slices: int | str | Sequence[int | str] = "mid",
+    axial_slices: int | str | Sequence[int | str] = "mid",
+    perc: tuple[float, float] = (1, 99),
+    save_path: Path | None = None,
+    show_img: bool = True,
+) -> plt.Figure:
+    root = Path(root)
+    sub, ses = subjectid.split("_")
+    base_t1_dir = Path(root) / sub / ses / "anat"
+    t1_candidates = [
+        base_t1_dir / f"{subjectid}_run-{run_number}_T1w.nii.gz",
+        base_t1_dir / f"{subjectid}_T1w.nii.gz",
+    ]
+    t1_file = _pick_first_exist(t1_candidates)
+    return visualize_t1w(
+        t1_file,
+        sagittal_slices,
+        coronal_slices,
+        axial_slices,
+        perc,
+        save_path,
+        show_img,
+    )

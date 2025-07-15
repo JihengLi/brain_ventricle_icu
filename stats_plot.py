@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import scipy.stats as st
+import seaborn as sns
 import yaml
 
 import matplotlib.pyplot as plt
@@ -16,6 +17,48 @@ with open("config.yaml", "r") as f:
 label_csv = Path(cfg["label_index"])
 label_df = pd.read_csv(label_csv)
 ID2NAME = dict(zip(label_df["IDX"], label_df["LABEL"]))
+
+
+def plot_roi_hist(
+    vdf: pd.DataFrame,
+    roi_id: Union[int, str],
+    color: str = "#4F81BD",
+    out_dir: str | Path = "stats_png",
+    show_plot: bool = False,
+) -> None:
+    out_dir = Path(out_dir)
+    out_dir.mkdir(exist_ok=True)
+
+    col = f"L{roi_id}" if isinstance(roi_id, int) else str(roi_id)
+    if col not in vdf.columns:
+        raise KeyError(f"Column '{col}' not found in DataFrame.")
+
+    roi_name = ID2NAME.get(roi_id, col) if "ID2NAME" in globals() else col
+    vol = vdf[col].dropna()
+    mean_val = vol.mean()
+
+    fig, ax = plt.subplots(figsize=(7, 4), constrained_layout=True)
+
+    bins = np.linspace(vol.min(), vol.max(), 30)
+    ax.hist(vol, bins=bins, density=True, alpha=0.5, color=color, label="Volume")
+    x_kde = np.linspace(bins[0], bins[-1], 200)
+    ax.plot(x_kde, st.gaussian_kde(vol)(x_kde), color=color, lw=2)
+    ax.axvline(mean_val, ls="--", color=color, label=f"Mean = {mean_val:.3f} mL")
+
+    ax.set_xlabel("Volume (mL)")
+    ax.set_ylabel("Density")
+    ax.set_title("Histogram / KDE")
+    ax.legend(fontsize=9)
+
+    fig.suptitle(f"{roi_name} Volume Distribution", fontsize=14)
+
+    out_path = out_dir / f"{roi_name.replace(' ', '_')}_vol_hist.png"
+    fig.savefig(out_path, dpi=300)
+    if show_plot:
+        plt.show()
+    else:
+        plt.close(fig)
+    print(f"Saved {out_path}")
 
 
 def plot_roi_compare(
@@ -107,7 +150,6 @@ def plot_delta_bar(
     show_plot: bool = False,
     cmap_name: str = "RdBu_r",
 ) -> None:
-
     out_dir = Path(out_dir)
     out_dir.mkdir(exist_ok=True)
 
@@ -125,7 +167,7 @@ def plot_delta_bar(
     plt.style.use("seaborn-v0_8-whitegrid")
     fig, ax = plt.subplots(figsize=(12, 4))
 
-    ax.bar(delta.index, delta.values, color=colors, width=0.8)
+    ax.bar(range(len(delta)), delta.values, color=colors, width=0.8)
     ax.axhline(0, color="gray", lw=1)
 
     ax.set_xlabel(f"{len(vdf[col])} different subjects")
@@ -143,6 +185,77 @@ def plot_delta_bar(
     plt.tight_layout()
     out_path = out_dir / f"{roi_name.replace(' ', '_')}_delta_pct.png"
     plt.savefig(out_path, dpi=dpi)
+    print("Saved", out_path)
+    if show_plot:
+        plt.show()
+    else:
+        plt.close(fig)
+
+
+def plot_delta_hist_kde(
+    vdf: pd.DataFrame,
+    roi_id: Union[int, str],
+    out_dir: str | Path = "stats_png",
+    dpi: int = 300,
+    bins: int = 30,
+    show_plot: bool = False,
+    kde_bw: float | None = None,
+) -> None:
+    out_dir = Path(out_dir)
+    out_dir.mkdir(exist_ok=True)
+
+    col = f"L{roi_id}" if isinstance(roi_id, int) else str(roi_id)
+    if col not in vdf.columns:
+        raise KeyError(f"ROI column '{col}' not found in DataFrame")
+    delta = vdf[col].dropna()
+    if delta.empty:
+        raise ValueError(f"No Δ% values found for ROI {col}")
+
+    roi_name = ID2NAME.get(int(str(roi_id).lstrip("L")), col)
+    mean, median, sd = delta.mean(), delta.median(), delta.std(ddof=1)
+    plt.style.use("seaborn-v0_8-whitegrid")
+    fig, ax = plt.subplots(figsize=(8, 4))
+    ax.hist(
+        delta,
+        bins=bins,
+        alpha=0.5,
+        color="#4F81BD",
+        edgecolor="white",
+        density=True,
+        label="Histogram",
+    )
+    sns.kdeplot(
+        delta, bw_adjust=kde_bw or 1.0, color="#CA0020", lw=2, ax=ax, label="KDE"
+    )
+    ax.axvline(mean, color="#4F81BD", ls="--", lw=1)
+    ax.axvline(median, color="#CA0020", ls=":", lw=1)
+    ax.text(
+        mean,
+        ax.get_ylim()[1] * 0.9,
+        f"μ={mean:+.2f}%",
+        color="#4F81BD",
+        ha="center",
+        va="top",
+        fontsize=8,
+    )
+    ax.text(
+        median,
+        ax.get_ylim()[1] * 0.8,
+        f"Med={median:+.2f}%",
+        color="#CA0020",
+        ha="center",
+        va="top",
+        fontsize=8,
+    )
+    ax.set_xlabel("Δ Volume (12 m − baseline) (%)")
+    ax.set_ylabel("Density")
+    ax.set_title(f"{roi_name}  Δ% Distribution  (n={len(delta)})", fontsize=13)
+    ax.yaxis.set_major_formatter(mtick.FormatStrFormatter("%.2f"))
+    ax.legend(fontsize=8)
+
+    plt.tight_layout()
+    out_path = out_dir / f"{roi_name.replace(' ', '_')}_delta_hist_kde.png"
+    fig.savefig(out_path, dpi=dpi)
     print("Saved", out_path)
     if show_plot:
         plt.show()
