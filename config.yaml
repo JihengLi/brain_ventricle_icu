@@ -12,6 +12,7 @@ roi_volumes_ses12_csv: "stats_csv/roi_volumes_ses12.csv"
 roi_volumes_ses00_z_csv: "stats_csv/roi_volumes_ses00_zscore.csv"
 roi_volumes_ses12_z_csv: "stats_csv/roi_volumes_ses12_zscore.csv"
 roi_volumes_delta_pct_csv: "stats_csv/roi_volumes_delta_pct.csv"
+roi_volumes_delta_pct_stats_csv: "stats_csv/roi_volumes_delta_pct_stats.csv"
 
 # ROI informations
 lut_addr: "labels/slant-ticv.label"

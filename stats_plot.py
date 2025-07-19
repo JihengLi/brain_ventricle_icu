@@ -19,48 +19,6 @@ label_df = pd.read_csv(label_csv)
 ID2NAME = dict(zip(label_df["IDX"], label_df["LABEL"]))
 
 
-def plot_roi_hist(
-    vdf: pd.DataFrame,
-    roi_id: Union[int, str],
-    color: str = "#4F81BD",
-    out_dir: str | Path = "stats_png",
-    show_plot: bool = False,
-) -> None:
-    out_dir = Path(out_dir)
-    out_dir.mkdir(exist_ok=True)
-
-    col = f"L{roi_id}" if isinstance(roi_id, int) else str(roi_id)
-    if col not in vdf.columns:
-        raise KeyError(f"Column '{col}' not found in DataFrame.")
-
-    roi_name = ID2NAME.get(roi_id, col) if "ID2NAME" in globals() else col
-    vol = vdf[col].dropna()
-    mean_val = vol.mean()
-
-    fig, ax = plt.subplots(figsize=(7, 4), constrained_layout=True)
-
-    bins = np.linspace(vol.min(), vol.max(), 30)
-    ax.hist(vol, bins=bins, density=True, alpha=0.5, color=color, label="Volume")
-    x_kde = np.linspace(bins[0], bins[-1], 200)
-    ax.plot(x_kde, st.gaussian_kde(vol)(x_kde), color=color, lw=2)
-    ax.axvline(mean_val, ls="--", color=color, label=f"Mean = {mean_val:.3f} mL")
-
-    ax.set_xlabel("Volume (mL)")
-    ax.set_ylabel("Density")
-    ax.set_title("Histogram / KDE")
-    ax.legend(fontsize=9)
-
-    fig.suptitle(f"{roi_name} Volume Distribution", fontsize=14)
-
-    out_path = out_dir / f"{roi_name.replace(' ', '_')}_vol_hist.png"
-    fig.savefig(out_path, dpi=300)
-    if show_plot:
-        plt.show()
-    else:
-        plt.close(fig)
-    print(f"Saved {out_path}")
-
-
 def plot_roi_compare(
     vdf_base: pd.DataFrame,
     vdf_12m: pd.DataFrame,
@@ -76,8 +34,13 @@ def plot_roi_compare(
         raise KeyError(f"Column '{col}' not found in DataFrames.")
     roi_name = ID2NAME[roi_id]
 
+    # align subjects
     vol0 = vdf_base[col].dropna()
     vol1 = vdf_12m[col].dropna()
+    common = vol0.index.intersection(vol1.index)
+    vol0 = vol0.loc[common]
+    vol1 = vol1.loc[common]
+
     mean0, mean1 = vol0.mean(), vol1.mean()
     d_mean = mean1 - mean0
 
@@ -85,7 +48,7 @@ def plot_roi_compare(
         1, 2, figsize=(11, 4), constrained_layout=True
     )
 
-    # Violin + Box
+    # 1) Violin + Box
     parts = ax_vio.violinplot(
         [vol0, vol1], showmedians=True, widths=0.8, positions=[1, 2]
     )
@@ -93,10 +56,16 @@ def plot_roi_compare(
         pc.set_facecolor(c)
         pc.set_alpha(0.6)
     ax_vio.boxplot([vol0, vol1], widths=0.25, showfliers=False, positions=[1, 2])
+
+    # overlay each subject’s trajectory
+    for subj in common:
+        y0, y1 = vol0[subj], vol1[subj]
+        ax_vio.plot([1, 2], [y0, y1], color="red", alpha=0.4, linewidth=0.7, zorder=0)
+
     ax_vio.set_xticks([1, 2])
     ax_vio.set_xticklabels(["Baseline", "12 mo"])
     ax_vio.set_ylabel("Volume (mL)")
-    ax_vio.set_title("Violin / Box")
+    ax_vio.set_title("Violin / Box with subject trajectories")
 
     # Histogram + KDE
     bins = np.linspace(min(vol0.min(), vol1.min()), max(vol0.max(), vol1.max()), 30)
@@ -247,7 +216,7 @@ def plot_delta_hist_kde(
         va="top",
         fontsize=8,
     )
-    ax.set_xlabel("Δ Volume (12 m − baseline) (%)")
+    ax.set_xlabel("Δ Volume (12 m - baseline) (%)")
     ax.set_ylabel("Density")
     ax.set_title(f"{roi_name}  Δ% Distribution  (n={len(delta)})", fontsize=13)
     ax.yaxis.set_major_formatter(mtick.FormatStrFormatter("%.2f"))
@@ -261,3 +230,98 @@ def plot_delta_hist_kde(
         plt.show()
     else:
         plt.close(fig)
+
+
+def plot_delta_pct_multi_roi(
+    vdf_delta: pd.DataFrame,
+    roi_ids: list[int],
+    out_dir: Union[str, Path] = "stats_png",
+    dpi: int = 300,
+    show_plot: bool = False,
+):
+    out_dir = Path(out_dir)
+    out_dir.mkdir(exist_ok=True)
+
+    cols = [f"L{r}" for r in roi_ids]
+    df = vdf_delta[cols].dropna(how="any")
+    if df.empty:
+        raise ValueError("No subjects with complete data for these ROIs.")
+
+    xs = np.arange(len(cols))
+
+    fig, ax = plt.subplots(figsize=(len(cols) * 2.5, 5), dpi=dpi)
+    plt.style.use("seaborn-whitegrid")
+    ax.grid(False)
+
+    parts = ax.violinplot(
+        [df[col].values for col in cols],
+        positions=xs,
+        widths=0.7,
+        showmedians=False,
+        showextrema=False,
+        showmeans=False,
+    )
+    for pc in parts["bodies"]:
+        pc.set_facecolor("#558A60")
+        pc.set_alpha(0.3)
+
+    q1 = df.quantile(0.25, axis=0).values
+    q3 = df.quantile(0.75, axis=0).values
+    ax.fill_between(xs, q1, q3, color="#D8BFD8", alpha=0.4, label="IQR (25-75%)")
+
+    for subj in df.index:
+        ax.plot(
+            xs, df.loc[subj].values, color="#888888", alpha=0.3, linewidth=0.7, zorder=0
+        )
+
+    med = df.median(axis=0).values
+    ax.plot(
+        xs, med, color="black", linewidth=2, marker="o", markersize=6, label="Median Δ%"
+    )
+
+    sums = df.sum(axis=1)
+    subj_max = sums.idxmax()
+    subj_min = sums.idxmin()
+    name_max = vdf_delta.loc[subj_max, "subject"]
+    name_min = vdf_delta.loc[subj_min, "subject"]
+    ax.plot(
+        xs,
+        df.loc[subj_max].values,
+        color="firebrick",
+        marker="o",
+        markersize=6,
+        linewidth=2.5,
+        label=f"Max ↑: {name_max}",
+        zorder=3,
+    )
+    ax.plot(
+        xs,
+        df.loc[subj_min].values,
+        color="navy",
+        marker="o",
+        markersize=6,
+        linewidth=2.5,
+        label=f"Max ↓: {name_min}",
+        zorder=3,
+    )
+
+    ax.set_xticks(xs)
+    ax.set_xticklabels(
+        [ID2NAME.get(r, str(r)) for r in roi_ids], rotation=25, ha="right"
+    )
+    ax.set_ylabel("Δ Volume (%)")
+    ax.set_title("Δ% trajectories across selected ROIs", pad=12)
+    ax.axhline(0, color="black", lw=1, linestyle="--", alpha=0.7)
+
+    ax.yaxis.set_major_formatter(mtick.FormatStrFormatter("%+.0f%%"))
+    ax.legend(loc="upper right", fontsize=8, ncol=2)
+
+    plt.tight_layout(rect=[0, 0, 1, 0.92])
+    out_path = out_dir / f"{'_'.join(map(str,roi_ids))}_delta_pct.png"
+    fig.savefig(out_path, dpi=dpi)
+    if show_plot:
+        plt.show()
+    else:
+        plt.close(fig)
+
+    print(f"Saved enhanced multi-ROI plot to {out_path}")

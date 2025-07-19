@@ -81,6 +81,15 @@ def _pick_first_exist(paths: List[Path]) -> Path:
     )
 
 
+def _load_as_ras(path):
+    img = nib.load(path, mmap=True)
+    data = img.get_fdata(dtype=np.float32)
+    src = io_orientation(img.affine)
+    tgt = axcodes2ornt(("R", "A", "S"))
+    trf = ornt_transform(src, tgt)
+    return apply_orientation(data, trf)
+
+
 def visualize_slant(
     seg_file: str | Path,
     lut_file: str | Path,
@@ -94,23 +103,11 @@ def visualize_slant(
     save_path: Path | None = None,
     show_img: bool = True,
 ) -> plt.Figure:
-    seg_img = nib.load(seg_file, mmap=True)
-    seg_data_native = seg_img.get_fdata(dtype=np.float32)
-
-    seg_src_ornt = io_orientation(seg_img.affine)
-    seg_tgt_ornt = axcodes2ornt(("R", "A", "S"))
-    seg_transform = ornt_transform(seg_src_ornt, seg_tgt_ornt)
-    seg_data = apply_orientation(seg_data_native, seg_transform)
+    seg_data = _load_as_ras(seg_file)
     cmap, norm = load_lut(lut_file, bg_transparent=t1_file != None)
 
     if t1_file:
-        t1_img = nib.load(t1_file, mmap=True)
-        t1_data_native = t1_img.get_fdata(dtype=np.float32)
-
-        t1_src_ornt = io_orientation(t1_img.affine)
-        t1_tgt_ornt = axcodes2ornt(("R", "A", "S"))
-        t1_transform = ornt_transform(t1_src_ornt, t1_tgt_ornt)
-        t1_data = apply_orientation(t1_data_native, t1_transform)
+        t1_data = _load_as_ras(t1_file)
         if t1_data.shape != seg_data.shape:
             raise ValueError("T1 shape ≠ seg shape")
     else:
@@ -193,8 +190,106 @@ def visualize_slant(
     return fig
 
 
+def visualize_slant_compare(
+    seg_file_a: str | Path,
+    seg_file_b: str | Path,
+    t1_file_a: str | Path | None = None,
+    t1_file_b: str | Path | None = None,
+    sagittal_slices: int | str | Sequence[int | str] = "mid",
+    coronal_slices: int | str | Sequence[int | str] = "mid",
+    axial_slices: int | str | Sequence[int | str] = "mid",
+    keep_roi_list: List[int] | None = None,
+    auto_slice: bool = False,
+    alpha_seg: float = 0.7,
+    save_path: Path | None = None,
+    show_img: bool = True,
+) -> plt.Figure:
+    segA = _load_as_ras(seg_file_a)
+    segB = _load_as_ras(seg_file_b)
+    if segA.shape != segB.shape:
+        raise ValueError("Two segmentations shape mismatch")
+
+    if (t1_file_a is None) ^ (t1_file_b is None):
+        raise ValueError("Either provide both t1_file_a & t1_file_b, or neither.")
+
+    if t1_file_a and t1_file_b:
+        t1A = _load_as_ras(t1_file_a)
+        t1B = _load_as_ras(t1_file_b)
+        if t1A.shape != segA.shape or t1B.shape != segA.shape:
+            raise ValueError("T1 shape mismatch")
+        t1_data = (t1A.astype(np.float32) + t1B.astype(np.float32)) / 2
+    else:
+        t1_data = None
+
+    if keep_roi_list is None:
+        raise ValueError("keep_roi_list must be set")
+    maskA = np.isin(segA, keep_roi_list)
+    maskB = np.isin(segB, keep_roi_list)
+
+    diff_map = np.zeros(segA.shape, dtype=np.uint8)
+    diff_map[maskA & maskB] = 1
+    diff_map[maskA & ~maskB] = 2
+    diff_map[~maskA & maskB] = 3
+
+    if auto_slice:
+        best_x = np.argmax(diff_map.sum(axis=(1, 2)))
+        best_y = np.argmax(diff_map.sum(axis=(0, 2)))
+        best_z = np.argmax(diff_map.sum(axis=(0, 1)))
+        sagittal_slices, coronal_slices, axial_slices = [best_x], [best_y], [best_z]
+
+    x_idx = _normalize_slices(sagittal_slices, segA.shape[0])
+    y_idx = _normalize_slices(coronal_slices, segA.shape[1])
+    z_idx = _normalize_slices(axial_slices, segA.shape[2])
+
+    combos = [(x, y, z) for x in x_idx for y in y_idx for z in z_idx]
+    fig, axes = plt.subplots(len(combos), 3, figsize=(15, 5 * len(combos)))
+    axes = np.asarray(axes).reshape(len(combos), 3)
+
+    cmap = ListedColormap(
+        [
+            (0, 0, 0, 0),
+            (77 / 255, 175 / 255, 74 / 255, alpha_seg),  # Common: green
+            (215 / 255, 25 / 255, 28 / 255, alpha_seg),  # Only A: red
+            (255 / 255, 215 / 255, 0 / 255, alpha_seg),  # Only B: yellow
+        ]
+    )
+
+    orient_titles = ("Sagittal", "Coronal", "Axial")
+    for row, (x, y, z) in enumerate(combos):
+        diff_slices = (
+            np.rot90(diff_map[x, :, :]),
+            np.rot90(diff_map[:, y, :]),
+            np.rot90(diff_map[:, :, z]),
+        )
+        if t1_data is not None:
+            t1_slices = (
+                np.rot90(t1_data[x, :, :]),
+                np.rot90(t1_data[:, y, :]),
+                np.rot90(t1_data[:, :, z]),
+            )
+        for col, (diff_slc, title_base) in enumerate(zip(diff_slices, orient_titles)):
+            ax = axes[row, col]
+            if t1_data is not None:
+                ax.imshow(t1_slices[col], cmap="gray", interpolation="nearest")
+            ax.imshow(diff_slc, cmap=cmap, interpolation="nearest", vmin=0, vmax=3)
+            ax.set_title(
+                f"{title_base} ({['X','Y','Z'][col]}={[x,y,z][col]})", fontsize=9
+            )
+            ax.axis("off")
+
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=300, bbox_inches="tight")
+    if show_img:
+        plt.show()
+    else:
+        plt.close(fig)
+    return fig
+
+
 def visualize_slant_subjectid(
     subjectid: str,
+    lut_file: str | Path = lut_addr,
     run_number: int = 1,
     sagittal_slices: int | str | Sequence[int | str] = "mid",
     coronal_slices: int | str | Sequence[int | str] = "mid",
@@ -227,13 +322,83 @@ def visualize_slant_subjectid(
         t1_file = _pick_first_exist(t1_candidates)
     return visualize_slant(
         seg_file,
-        lut_addr,
+        lut_file,
         sagittal_slices,
         coronal_slices,
         axial_slices,
         keep_roi_list,
         auto_slice,
         t1_file,
+        alpha_seg,
+        save_path,
+        show_img,
+    )
+
+
+def visualize_slant_subjectid_compare(
+    subjectid: str,
+    run_number: int = 1,
+    sagittal_slices: int | str | Sequence[int | str] = "mid",
+    coronal_slices: int | str | Sequence[int | str] = "mid",
+    axial_slices: int | str | Sequence[int | str] = "mid",
+    keep_roi_list: List[int] | None = None,
+    auto_slice: bool = False,
+    bg_t1_file: bool = False,
+    alpha_seg: float = 0.7,
+    save_path: Path | None = None,
+    show_img: bool = True,
+) -> plt.Figure:
+    base_seg_dir = Path(slant_root_dir) / subjectid
+    seg_candidates_a = [
+        base_seg_dir
+        / "ses-00"
+        / f"SLANT-TICVv1.2run-{run_number}/post/FinalResult"
+        / f"{subjectid}_ses-00_run-{run_number}_T1w_seg.nii.gz",
+        base_seg_dir
+        / "ses-00"
+        / "SLANT-TICVv1.2/post/FinalResult"
+        / f"{subjectid}_ses-00_T1w_seg.nii.gz",
+    ]
+    seg_file_a = _pick_first_exist(seg_candidates_a)
+
+    seg_candidates_b = [
+        base_seg_dir
+        / "ses-12"
+        / f"SLANT-TICVv1.2run-{run_number}/post/FinalResult"
+        / f"{subjectid}_ses-12_run-{run_number}_T1w_seg.nii.gz",
+        base_seg_dir
+        / "ses-12"
+        / "SLANT-TICVv1.2/post/FinalResult"
+        / f"{subjectid}_ses-12_T1w_seg.nii.gz",
+    ]
+    seg_file_b = _pick_first_exist(seg_candidates_b)
+
+    t1_file_a, t1_file_b = None, None
+    if bg_t1_file:
+        t1_root = Path(t1_root_dir)
+        ses_tags = {"00": "a", "12": "b"}
+        for ses, var_tag in ses_tags.items():
+            base_dir = t1_root / subjectid / f"ses-{ses}" / "anat"
+            t1_candidates = [
+                base_dir / f"{subjectid}_ses-{ses}_run-{run_number}_T1w.nii.gz",
+                base_dir / f"{subjectid}_ses-{ses}_T1w.nii.gz",
+            ]
+            found = _pick_first_exist(t1_candidates)
+            if var_tag == "a":
+                t1_file_a = found
+            else:
+                t1_file_b = found
+
+    return visualize_slant_compare(
+        seg_file_a,
+        seg_file_b,
+        t1_file_a,
+        t1_file_b,
+        sagittal_slices,
+        coronal_slices,
+        axial_slices,
+        keep_roi_list,
+        auto_slice,
         alpha_seg,
         save_path,
         show_img,
@@ -253,13 +418,7 @@ def visualize_t1w(
     if not t1_file.exists():
         raise FileNotFoundError(t1_file)
 
-    img = nib.load(t1_file, mmap=True)
-    data_native = img.get_fdata(dtype=np.float32)
-
-    src_ornt = io_orientation(img.affine)
-    tgt_ornt = axcodes2ornt(("R", "A", "S"))
-    transform = ornt_transform(src_ornt, tgt_ornt)
-    data_ras = apply_orientation(data_native, transform)
+    data_ras = _load_as_ras(t1_file)
 
     x_idxs = _normalize_slices(sagittal_slices, data_ras.shape[0])
     y_idxs = _normalize_slices(coronal_slices, data_ras.shape[1])
